@@ -1,26 +1,115 @@
 {
-  "name": "compression-service",
+  "name": "@open-source/gltf-compression-service",
   "version": "1.0.0",
-  "description": "A standalone compression service using Hono framework",
+  "description": "High-performance 3D model compression service with glTF, Draco, and KTX2 support. REST API for mesh and texture compression built on Hono framework.",
+  "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./compression": {
+      "import": "./dist/compression/index.js",
+      "types": "./dist/compression/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "start:prod": "NODE_ENV=production node dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "docker:build": "docker build -t compression-service:latest .",
+    "docker:build:prod": "docker build --target production -t compression-service:latest .",
+    "docker:build:dev": "docker build --target builder -t compression-service:dev .",
+    "docker:run": "docker run -p 3117:3117 compression-service:latest",
+    "docker:run:prod": "docker run -d --name compression-service -p 3117:3117 --restart unless-stopped compression-service:latest",
+    "docker:stop": "docker stop compression-service",
+    "docker:clean": "docker rm compression-service",
+    "docker:logs": "docker logs compression-service -f",
+    "docker:shell": "docker exec -it compression-service sh",
+    "docker:compose": "docker-compose up -d",
+    "docker:compose:dev": "docker-compose --profile dev up -d",
+    "docker:compose:build": "docker-compose build",
+    "docker:compose:down": "docker-compose down",
+    "docker:compose:logs": "docker-compose logs -f",
+    "docker:size": "docker images compression-service --format \"table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}\"",
+    "docker:prune": "docker system prune -f && docker image prune -f"
+  },
+  "keywords": [
+    "gltf",
+    "glb",
+    "3d",
+    "compression",
+    "draco",
+    "ktx2",
+    "texture",
+    "mesh",
+    "webassembly",
+    "hono",
+    "rest-api",
+    "3d-models",
+    "basis-universal",
+    "webgl",
+    "graphics",
+    "optimization",
+    "typescript"
+  ],
+  "author": {
+    "name": "Open Source Community",
+    "email": "opensource@example.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/gltf-compression-service.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/gltf-compression-service/issues"
+  },
+  "homepage": "https://github.com/your-org/gltf-compression-service#readme",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
   },
   "dependencies": {
-    "hono": "^4.0.0",
-    "@gltf-transform/core": "^4.0.0",
-    "@gltf-transform/extensions": "^4.0.0",
-    "@gltf-transform/functions": "^4.0.0",
-    "draco3dgltf": "^1.5.0"
+    "@gltf-transform/core": "^4.0.8",
+    "@gltf-transform/extensions": "^4.0.8",
+    "@gltf-transform/functions": "^4.0.8",
+    "@hono/node-server": "^1.19.2",
+    "canvas": "^3.2.0",
+    "draco3dgltf": "^1.5.7",
+    "hono": "^4.6.3"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "tsx": "^4.0.0",
-    "typescript": "^5.0.0"
+    "@types/node": "^20.16.10",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
   },
-  "engines": {
-    "node": ">=18.0.0"
+  "peerDependencies": {
+    "node-canvas-webgl": "^0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "node-canvas-webgl": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/your-org"
   }
 }

@@ -63,3 +63,34 @@ jspm_packages/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Development and test files
+*.test.*
+*.spec.*
+test-data/
+test-files/
+temp/
+tmp/
+*.tmp
+validation_*.js
+validate_*.js
+
+# Binary test assets
+*.glb
+*.gltf
+*.bin
+*.png
+*.jpg
+*.jpeg
+*.ktx2
+*.webp
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+docker-compose.override.yml

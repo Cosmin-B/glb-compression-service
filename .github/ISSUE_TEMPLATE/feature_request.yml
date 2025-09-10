@@ -1,0 +1,93 @@
+name: Feature Request
+description: Suggest an idea for this project
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Please fill out the sections below.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: A clear and concise description of what the problem is.
+      placeholder: I'm always frustrated when...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen.
+      placeholder: I would like...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered
+      description: A clear and concise description of any alternative solutions or features you've considered.
+    validations:
+      required: false
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature Category
+      multiple: false
+      options:
+        - New Compression Format
+        - API Enhancement
+        - Performance Improvement
+        - Developer Experience
+        - Documentation
+        - Docker/Deployment
+        - Testing
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority Level
+      multiple: false
+      options:
+        - Low (Nice to have)
+        - Medium (Would improve workflow)
+        - High (Needed for project completion)
+        - Critical (Blocking current work)
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Describe your specific use case for this feature
+      placeholder: |
+        I am working on...
+        This feature would help by...
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other context, screenshots, or examples about the feature request here.
+  - type: checkboxes
+    id: existing-features
+    attributes:
+      label: Existing Features
+      description: Please confirm you've checked existing functionality
+      options:
+        - label: I have checked the documentation and this feature doesn't exist
+          required: true
+        - label: I have searched existing issues and this hasn't been requested before
+          required: true
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/your-org/compression-service/blob/main/CODE_OF_CONDUCT.md)
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true

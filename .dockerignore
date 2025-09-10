@@ -1,0 +1,116 @@
+# Node.js dependencies and cache
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.yarn/
+
+# Build outputs (will be created in container)
+dist/
+build/
+out/
+
+# Environment files
+.env*
+!.env.example
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.editorconfig
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Docker files (exclude from build context)
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+.dockerignore
+
+# Documentation and examples (reduce image size)
+README.md
+docs/
+*.md
+!package.json
+CHANGELOG*
+LICENSE*
+
+# Test files and test artifacts
+test/
+tests/
+__tests__/
+*.test.*
+*.spec.*
+jest.config.*
+.nyc_output/
+coverage/
+
+# Development and build artifacts
+*.log
+*.pid
+*.seed
+*.tgz
+.nyc_output
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Linting and formatting
+.eslintrc*
+.prettierrc*
+.stylelintrc*
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# Temporary files and directories
+tmp/
+temp/
+.tmp/
+.temp/
+
+# Large test files (exclude sample models and images from container)
+*.glb
+*.gltf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.webp
+*.ktx2
+*.dds
+custom_test.glb
+model_test.glb
+updated_test.glb
+dendur_test.png
+validate_compression_updates.js
+
+# Keep only essential WASM files in public directory - exclude others
+# Note: public/ directory will be explicitly copied in Dockerfile
