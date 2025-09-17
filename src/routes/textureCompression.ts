@@ -99,10 +99,24 @@ textureRoutes.post('/png-to-ktx2', async (c) => {
     const compressionSettings: KTX2CompressionSettings = {
       format: KTX2TranscoderFormat.ETC1S,  // Use new format enum
       basisUniversalMode: 'ETC1S',  // Keep for backward compatibility
-      quality: 100,                 // Original quality setting 
+      quality: 128,                 // Use proper default quality (128 matches DEFAULT_ETC1S_BASIS_PARAMS)
       oetf: 'srgb',                // Original oetf setting for color textures
       generateMipmaps: true,        // Original mipmap setting
-      useZstandard: true            // Original zstandard setting
+      useZstandard: true,           // Original zstandard setting
+      // Explicitly set default basis params to ensure proper mipmap generation
+      basisParams: {
+        uastc: false,
+        verbose: true,
+        generateMipmaps: true,
+        mipmapFilter: 'kaiser',
+        perceptual: true,
+        qualityLevel: 128,
+        zstdLevel: 3,
+        checkForAlpha: true,
+        normalMap: false,
+        maxEndpoints: 16128,
+        maxSelectors: 16128
+      }
     };
     
     // Override format if provided

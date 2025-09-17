@@ -214,7 +214,7 @@ export interface BasisParams {
 const DEFAULT_ETC1S_BASIS_PARAMS: Partial<BasisParams> = {
   uastc: false,
   verbose: true,
-  generateMipmaps: false,
+  generateMipmaps: true,
   mipmapFilter: 'kaiser',
   perceptual: true,
   qualityLevel: 128, // Middle quality
@@ -231,7 +231,7 @@ const DEFAULT_ETC1S_BASIS_PARAMS: Partial<BasisParams> = {
 const DEFAULT_UASTC_BASIS_PARAMS: Partial<BasisParams> = {
   uastc: true,
   verbose: true,
-  generateMipmaps: false,
+  generateMipmaps: true,
   mipmapFilter: 'kaiser',
   perceptual: true,
   rdo_uastc_quality_scalar: 2, // Balanced quality/size
@@ -375,10 +375,22 @@ export async function compressImageToKTX2(
     const image = await loadImage(imageBuffer);
     console.log(`KTX2: Image loaded - ${image.width}x${image.height}`);
     
-    // Ensure dimensions are divisible by 4 for block compression
-    const width = Math.floor(image.width / 4) * 4;
-    const height = Math.floor(image.height / 4) * 4;
-    console.log(`KTX2: Adjusted dimensions - ${width}x${height}`);
+    // Ensure WebGL-compatible dimensions for mipmaps
+    // WebGL requires each mipmap level to have dimensions that are multiples of 4 or equal to 0, 1, or 2
+    const adjustDimensionForWebGL = (dimension: number): number => {
+      // If already small enough for WebGL compatibility
+      if (dimension <= 2) return dimension;
+
+      // Round down to nearest multiple of 4 for optimal mipmap chain
+      const adjusted = Math.floor(dimension / 4) * 4;
+
+      // Ensure minimum dimension of 4 for block compression
+      return Math.max(4, adjusted);
+    };
+
+    const width = adjustDimensionForWebGL(image.width);
+    const height = adjustDimensionForWebGL(image.height);
+    console.log(`KTX2: WebGL-compatible dimensions - ${width}x${height} (original: ${image.width}x${image.height})`);
     
     // Create canvas and get image data
     const canvas = createCanvas(width, height);
@@ -402,20 +414,35 @@ export async function compressImageToKTX2(
     console.log("KTX2: Creating textureCreateInfo...");
     const createInfo = new ktx.textureCreateInfo();
     
-    // Set Vulkan format based on OETF setting
-    if (compressionSettings.oetf === 'srgb') {
+    // Set Vulkan format based on OETF setting with better color space detection
+    const mergedParams = compressionSettings.basisParams;
+    const isColorTexture = !mergedParams?.normalMap; // Normal maps should use linear space
+
+    if (compressionSettings.oetf === 'srgb' || (isColorTexture && compressionSettings.oetf !== 'linear')) {
       createInfo.vkFormat = ktx.VkFormat.R8G8B8A8_SRGB;
-      console.log("KTX2: Using VK_FORMAT_R8G8B8A8_SRGB for sRGB input");
+      console.log("KTX2: Using VK_FORMAT_R8G8B8A8_SRGB for sRGB color texture");
     } else {
       createInfo.vkFormat = ktx.VkFormat.R8G8B8A8_UNORM;
-      console.log("KTX2: Using VK_FORMAT_R8G8B8A8_UNORM for linear input");
+      console.log("KTX2: Using VK_FORMAT_R8G8B8A8_UNORM for linear/normal map data");
     }
     
     createInfo.baseWidth = width;
     createInfo.baseHeight = height;
     createInfo.baseDepth = 1;
     createInfo.numDimensions = 2;
-    createInfo.numLevels = 1;
+
+    // Calculate correct number of mipmap levels when mipmaps are enabled
+    const generateMipmaps = mergedParams?.generateMipmaps || false;
+    if (generateMipmaps) {
+      // Calculate the number of mipmap levels (same logic as the logging)
+      const maxDimension = Math.max(width, height);
+      const numLevels = Math.floor(Math.log2(maxDimension)) + 1;
+      createInfo.numLevels = numLevels;
+      console.log(`KTX2: Setting KTX2 container for ${numLevels} mipmap levels`);
+    } else {
+      createInfo.numLevels = 1;
+    }
+
     createInfo.numLayers = 1;
     createInfo.numFaces = 1;
     createInfo.isArray = false;
@@ -497,7 +524,16 @@ export async function compressImageToKTX2(
     
     console.log(`KTX2: Applied comprehensive basis parameters successfully`);
     console.log(`KTX2: Mipmaps: ${basisParams.generateMipmaps ? 'enabled' : 'disabled'}`);
+    console.log(`KTX2: Mipmap filter: ${basisParams.mipmapFilter || 'default'}`);
     console.log(`KTX2: Perceptual: ${basisParams.perceptual ? 'enabled' : 'disabled'}`);
+    console.log(`KTX2: Color space: ${compressionSettings.oetf || 'auto-detected'}`);
+
+    // Log WebGL compatibility information
+    if (basisParams.generateMipmaps) {
+      const maxMipLevels = Math.floor(Math.log2(Math.max(width, height))) + 1;
+      console.log(`KTX2: Will generate ${maxMipLevels} mipmap levels for WebGL compatibility`);
+      console.log(`KTX2: Base dimensions (${width}x${height}) are WebGL-compatible for mipmapping`);
+    }
 
     // Compress to Basis Universal
     console.log("KTX2: Compressing to Basis Universal...");
@@ -583,7 +619,7 @@ export async function compressGLBTexturesKTX2(
   const defaultSettings: KTX2CompressionSettings = {
     format: KTX2TranscoderFormat.ETC1S, // Changed from UASTC to ETC1S for better compression ratios
     quality: 128, // Middle quality for ETC1S
-    generateMipmaps: false,
+    generateMipmaps: true, // Enable mipmaps for WebGL compatibility
     useZstandard: true,
     oetf: 'srgb',
     flipY: true, // Critical: Default to true for GLB compatibility
@@ -591,7 +627,10 @@ export async function compressGLBTexturesKTX2(
       qualityLevel: 128, // Middle quality for ETC1S
       checkForAlpha: true,
       perceptual: true,
-      normalMap: false
+      normalMap: false,
+      generateMipmaps: true, // Ensure mipmaps are generated
+      mipmapFilter: 'kaiser', // Use Kaiser filter for better quality
+      mipSrgb: true // Properly handle sRGB color space in mipmaps
     }
   };
 

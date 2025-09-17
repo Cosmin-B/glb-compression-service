@@ -4,7 +4,9 @@ import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import { errorHandler } from './middleware/errorHandler.js';
+import { createRequestQueueMiddleware } from './middleware/requestQueue.js';
 import { compression } from './routes/compression.js';
+import monitoring from './routes/monitoring.js';
 
 const app = new Hono();
 
@@ -24,9 +26,15 @@ app.use('/public/*', serveStatic({ root: './' }));
 // Import texture routes
 import textureRoutes from './routes/textureCompression.js';
 
+// Apply request queue middleware to compression routes
+app.use('/compress/*', createRequestQueueMiddleware());
+
 // Mount compression routes
 app.route('/compress', compression);
 app.route('/texture', textureRoutes);
+
+// Mount monitoring routes
+app.route('/queue', monitoring);
 
 // Health check endpoint
 app.get('/health', (c) => {
@@ -39,7 +47,7 @@ app.get('/health', (c) => {
 
 // Root endpoint
 app.get('/', (c) => {
-  return c.json({ 
+  return c.json({
     message: 'Compression Service API',
     version: '1.0.0',
     endpoints: {
@@ -55,6 +63,13 @@ app.get('/', (c) => {
         imageToKtx2: 'POST /texture/image-to-ktx2 - Enhanced image to KTX2 conversion with customizable settings',
         glbTextures: 'POST /texture/glb-textures - Enhanced GLB texture compression',
         healthCheck: 'GET /texture/health'
+      },
+      monitoring: {
+        queueStats: 'GET /queue/stats - Get current queue statistics',
+        queueHealth: 'GET /queue/health - Health check with queue status',
+        endpoints: 'GET /queue/endpoints - List all configured endpoints',
+        queueConfig: 'POST /queue/config - Update endpoint configuration',
+        metrics: 'GET /queue/metrics - Prometheus-style metrics'
       }
     }
   });
