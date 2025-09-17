@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { compressGLTFMeshOnly, compressGLTFComplete, compressGLBTexturesKTX2 } from '../compression/index.js';
 import { KTX2TranscoderFormat, KTX2CompressionSettings } from '../compression/ktx2TextureCompression.js';
+import { analyzeGLB, getOptimalCompressionStrategy } from '../utils/gltfAnalyzer.js';
 
 const compression = new Hono();
 
@@ -131,6 +132,7 @@ const validateBasisParams = (basisParams: string): any => {
  *    - glb: GLB file (required)
  *    - format: "ETC1S" or "UASTC" (optional, default: "ETC1S")
  *    - flipY: boolean (optional, default: true)
+ *    - forceFormat: boolean (optional, default: false) - if true, overrides normal map auto-detection
  *    - basisParams: JSON object with compression settings (optional)
  */
 compression.post('/textures', async (c) => {
@@ -141,6 +143,7 @@ compression.post('/textures', async (c) => {
     let arrayBuffer: ArrayBuffer;
     let format = KTX2TranscoderFormat.ETC1S; // Default format
     let flipY = true; // Default flipY for GLB compatibility
+    let forceFormat = false; // Default: allow normal map auto-detection
     let basisParams: any = undefined;
     
     if (contentType.includes('multipart/form-data')) {
@@ -160,6 +163,7 @@ compression.post('/textures', async (c) => {
       // Extract optional parameters
       const formatParam = formData.get('format') as string;
       const flipYParam = formData.get('flipY') as string;
+      const forceFormatParam = formData.get('forceFormat') as string;
       const basisParamsParam = formData.get('basisParams') as string;
       
       // Validate and set format
@@ -172,6 +176,11 @@ compression.post('/textures', async (c) => {
         flipY = validateFlipY(flipYParam);
       }
       
+      // Validate and set forceFormat
+      if (forceFormatParam) {
+        forceFormat = validateFlipY(forceFormatParam); // Reuse same boolean validation
+      }
+      
       // Validate and set basisParams
       if (basisParamsParam) {
         basisParams = validateBasisParams(basisParamsParam);
@@ -179,7 +188,7 @@ compression.post('/textures', async (c) => {
       
       arrayBuffer = await glbFile.arrayBuffer();
       console.log(`API: Received GLB file: ${glbFile.name}, Size: ${glbFile.size}`);
-      console.log(`API: Parameters - Format: ${format}, FlipY: ${flipY}, BasisParams: ${basisParamsParam ? 'provided' : 'default'}`);
+      console.log(`API: Parameters - Format: ${format}, FlipY: ${flipY}, ForceFormat: ${forceFormat}, BasisParams: ${basisParamsParam ? 'provided' : 'default'}`);
       
     } else {
       // Legacy binary data handling for backward compatibility
@@ -201,6 +210,7 @@ compression.post('/textures', async (c) => {
     const compressionSettings: KTX2CompressionSettings = {
       format: format,
       flipY: flipY,
+      forceFormat: forceFormat,
       basisParams: basisParams
     };
     const compressionResult = await compressGLBTexturesKTX2(arrayBuffer, compressionSettings);
@@ -253,12 +263,16 @@ compression.post('/textures', async (c) => {
 });
 
 /**
- * POST /compress/full - Full compression (both mesh and texture)
+ * POST /compress/full - Intelligent full compression (mesh and/or texture based on analysis)
  * Accepts raw binary data (ArrayBuffer/Buffer) and returns compressed binary
+ * Automatically detects existing Draco compression to avoid conflicts
+ * 
+ * Query parameters:
+ * - ignoreDraco=true: Skip Draco detection and force full compression anyway
  */
 compression.post('/full', async (c) => {
   try {
-    console.log("API: Starting full compression endpoint (mesh + textures)");
+    console.log("API: Starting intelligent full compression endpoint");
     
     // Get raw binary data from request body (ArrayBuffer from Cloudflare Workers)
     const arrayBuffer = await c.req.arrayBuffer();
@@ -272,11 +286,94 @@ compression.post('/full', async (c) => {
     verifyInputType(arrayBuffer);
     console.log("API: Received binary data, Size:", arrayBuffer.byteLength);
     
-    // Apply full compression (both mesh and textures)
-    console.log("API: Starting full compression...");
-    const compressionResult = await compressGLTFComplete(arrayBuffer);
-    const compressedArrayBuffer = compressionResult.buffer;
-    console.log("API: Full compression completed");
+    // Check for ignoreDraco query parameter
+    const ignoreDraco = c.req.query('ignoreDraco') === 'true';
+    console.log("API: Ignore Draco detection:", ignoreDraco);
+    
+    // Analyze GLB to determine optimal compression strategy
+    console.log("API: Analyzing GLB file structure...");
+    const analysis = analyzeGLB(arrayBuffer);
+    let strategy = getOptimalCompressionStrategy(analysis);
+    
+    // Override strategy if ignoreDraco is enabled
+    if (ignoreDraco) {
+      console.log("API: Ignoring Draco detection, forcing full compression");
+      strategy = {
+        shouldCompressMesh: analysis.hasMeshes,
+        shouldCompressTextures: analysis.hasTextures,
+        reason: 'Forced full compression (ignoreDraco=true)',
+        recommendedEndpoint: '/compress/full'
+      };
+    }
+    
+    console.log("API: GLB Analysis Results:", {
+      hasTextures: analysis.hasTextures,
+      hasMeshes: analysis.hasMeshes,
+      hasDracoCompression: analysis.hasDracoCompression,
+      textureCount: analysis.textureCount,
+      meshCount: analysis.meshCount
+    });
+    
+    console.log("API: Compression Strategy:", {
+      shouldCompressMesh: strategy.shouldCompressMesh,
+      shouldCompressTextures: strategy.shouldCompressTextures,
+      reason: strategy.reason,
+      recommendedEndpoint: strategy.recommendedEndpoint
+    });
+
+    let compressedArrayBuffer: ArrayBuffer;
+    let compressionResult: any;
+    
+    if (!strategy.shouldCompressMesh && !strategy.shouldCompressTextures) {
+      // No compression needed
+      console.log("API: No compression needed, returning original file");
+      compressedArrayBuffer = arrayBuffer;
+      compressionResult = {
+        buffer: arrayBuffer,
+        meshCompressed: false,
+        textureCompressed: false,
+        errors: [`No compression applied: ${strategy.reason}`]
+      };
+    } else if (strategy.shouldCompressMesh && strategy.shouldCompressTextures) {
+      // Full compression (original behavior)
+      console.log("API: Applying full compression (mesh + textures)...");
+      compressionResult = await compressGLTFComplete(arrayBuffer);
+      compressedArrayBuffer = compressionResult.buffer;
+    } else if (strategy.shouldCompressTextures && !strategy.shouldCompressMesh) {
+      // Texture-only compression (avoids Draco conflict)
+      console.log("API: Applying texture-only compression (Draco mesh already present)...");
+      const textureCompressionSettings: KTX2CompressionSettings = {
+        format: KTX2TranscoderFormat.ETC1S,
+        flipY: true,
+        forceFormat: true // Use ETC1S for all textures for maximum compression
+      };
+      const textureResult = await compressGLBTexturesKTX2(arrayBuffer, textureCompressionSettings);
+      compressedArrayBuffer = textureResult.buffer;
+      compressionResult = {
+        buffer: textureResult.buffer,
+        meshCompressed: false,
+        textureCompressed: true,
+        texturesProcessed: textureResult.texturesProcessed,
+        errors: textureResult.errors || []
+      };
+    } else if (strategy.shouldCompressMesh && !strategy.shouldCompressTextures) {
+      // Mesh-only compression
+      console.log("API: Applying mesh-only compression...");
+      compressedArrayBuffer = await compressGLTFMeshOnly(arrayBuffer);
+      compressionResult = {
+        buffer: compressedArrayBuffer,
+        meshCompressed: true,
+        textureCompressed: false,
+        errors: []
+      };
+    } else {
+      // Fallback - should not reach here
+      console.log("API: Fallback to original full compression...");
+      compressionResult = await compressGLTFComplete(arrayBuffer);
+      compressedArrayBuffer = compressionResult.buffer;
+    }
+    
+    console.log("API: Compression completed");
     
     // Calculate compression statistics
     const stats = calculateCompressionStats(arrayBuffer.byteLength, compressedArrayBuffer.byteLength);
@@ -296,9 +393,13 @@ compression.post('/full', async (c) => {
     };
     addCompressionHeaders(responseHeaders, stats);
     
-    // Add additional headers for full compression results
+    // Add additional headers for intelligent compression results
     responseHeaders['X-Mesh-Compressed'] = compressionResult.meshCompressed.toString();
     responseHeaders['X-Texture-Compressed'] = compressionResult.textureCompressed.toString();
+    responseHeaders['X-Had-Draco-Compression'] = analysis.hasDracoCompression.toString();
+    responseHeaders['X-Ignored-Draco-Detection'] = ignoreDraco.toString();
+    responseHeaders['X-Compression-Strategy'] = strategy.reason;
+    responseHeaders['X-Textures-Processed'] = compressionResult.texturesProcessed?.toString() || '0';
     if (compressionResult.errors && compressionResult.errors.length > 0) {
       responseHeaders['X-Compression-Warnings'] = compressionResult.errors.join('; ');
     }

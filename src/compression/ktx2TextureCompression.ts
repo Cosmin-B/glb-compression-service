@@ -33,6 +33,7 @@ export interface KTX2CompressionSettings {
   generateMipmaps?: boolean;
   useZstandard?: boolean;
   flipY?: boolean;
+  forceFormat?: boolean; // If true, overrides normal map auto-detection
   customBasisParams?: Partial<BasisParams>; // Legacy support
 }
 
@@ -614,16 +615,61 @@ export async function compressGLBTexturesKTX2(
   try {
     // Import gltf-transform dependencies
     const { NodeIO } = await import("@gltf-transform/core");
-    const { ALL_EXTENSIONS } = await import("@gltf-transform/extensions");
+    const { 
+      KHRTextureBasisu,
+      KHRTextureTransform,
+      KHRMaterialsPBRSpecularGlossiness,
+      KHRMaterialsUnlit,
+      KHRMaterialsEmissiveStrength,
+      KHRMaterialsIOR,
+      KHRMaterialsTransmission,
+      KHRMaterialsSpecular,
+      KHRMaterialsSheen,
+      KHRMaterialsClearcoat,
+      KHRMaterialsIridescence,
+      KHRMaterialsAnisotropy,
+      KHRMaterialsVolume,
+      KHRMaterialsVariants,
+      EXTTextureWebP,
+      EXTTextureAVIF
+    } = await import("@gltf-transform/extensions");
+    
+    // Use only texture-related extensions, explicitly excluding mesh compression extensions
+    const textureOnlyExtensions = [
+      KHRTextureBasisu,
+      KHRTextureTransform,
+      KHRMaterialsPBRSpecularGlossiness,
+      KHRMaterialsUnlit,
+      KHRMaterialsEmissiveStrength,
+      KHRMaterialsIOR,
+      KHRMaterialsTransmission,
+      KHRMaterialsSpecular,
+      KHRMaterialsSheen,
+      KHRMaterialsClearcoat,
+      KHRMaterialsIridescence,
+      KHRMaterialsAnisotropy,
+      KHRMaterialsVolume,
+      KHRMaterialsVariants,
+      EXTTextureWebP,
+      EXTTextureAVIF
+    ];
     
     const io = new NodeIO()
-      .registerExtensions(ALL_EXTENSIONS);
+      .registerExtensions(textureOnlyExtensions);
 
     // Convert ArrayBuffer to Uint8Array before reading
     const uint8Input = new Uint8Array(inputBuffer);
 
-    // Read the glTF/glb data from the ArrayBuffer
-    const document = await io.readBinary(uint8Input);
+    // Read the glTF/glb data from the ArrayBuffer - this may still have Draco data but we'll ignore it
+    let document;
+    try {
+      document = await io.readBinary(uint8Input);
+    } catch (error) {
+      console.log("Texture-only compression: Failed to read GLB with texture extensions, trying minimal loader...");
+      // Fallback to minimal NodeIO without any extensions if Draco conflicts persist
+      const minimalIO = new NodeIO();
+      document = await minimalIO.readBinary(uint8Input);
+    }
     
     console.log("GLB document loaded successfully");
     console.log("Number of textures before compression:", document.getRoot().listTextures().length);
@@ -659,9 +705,14 @@ export async function compressGLBTexturesKTX2(
 
         // Detect if this is a normal map and adjust format accordingly
         const isNormal = isNormalMap(textureName);
-        const textureFormat = isNormal ? KTX2TranscoderFormat.UASTC_4x4 : finalSettings.format;
+        const textureFormat = finalSettings.forceFormat 
+          ? finalSettings.format // Force the specified format for all textures
+          : (isNormal ? KTX2TranscoderFormat.UASTC_4x4 : finalSettings.format); // Auto-detect format
         
-        console.log(`  Detected as ${isNormal ? 'normal map' : 'regular texture'}, using ${textureFormat} format`);
+        const formatReason = finalSettings.forceFormat 
+          ? 'forced format' 
+          : (isNormal ? 'normal map auto-detection' : 'default format');
+        console.log(`  Detected as ${isNormal ? 'normal map' : 'regular texture'}, using ${textureFormat} format (${formatReason})`);
 
         // Create texture-specific compression settings
         const textureSettings: KTX2CompressionSettings = {
@@ -670,13 +721,19 @@ export async function compressGLBTexturesKTX2(
           basisParams: {
             ...finalSettings.basisParams,
             normalMap: isNormal,
-            // Use UASTC settings for normal maps
-            ...(isNormal ? {
-              uastc: true,
-              rdo_uastc: true,
-              rdo_uastc_quality_scalar: 3
+            // Use format-specific settings unless forced
+            ...(finalSettings.forceFormat ? {
+              // When forcing format, use the format's default settings
+              uastc: textureFormat === KTX2TranscoderFormat.UASTC_4x4
             } : {
-              uastc: false
+              // Auto-detect: Use UASTC settings for normal maps, ETC1S for others
+              ...(isNormal && textureFormat === KTX2TranscoderFormat.UASTC_4x4 ? {
+                uastc: true,
+                rdo_uastc: true,
+                rdo_uastc_quality_scalar: 3
+              } : {
+                uastc: textureFormat === KTX2TranscoderFormat.UASTC_4x4
+              })
             })
           }
         };

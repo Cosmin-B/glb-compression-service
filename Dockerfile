@@ -24,7 +24,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install all dependencies (including dev dependencies for build)
-RUN npm ci --only=production=false --no-audit --no-fund
+RUN npm ci --include=dev --no-audit --no-fund
 
 # Copy source code and TypeScript config
 COPY src ./src
@@ -66,7 +66,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install only production dependencies (canvas needs build tools)
-RUN npm ci --only=production --no-audit --no-fund && \
+RUN npm ci --omit=dev --no-audit --no-fund && \
     npm cache clean --force
 
 # Stage 3: Final production image

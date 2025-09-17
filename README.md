@@ -10,12 +10,14 @@ A high-performance, production-ready compression service for 3D models and textu
 ## 🚀 Features
 
 - **High-Performance Compression**: Achieve up to 95% file size reduction for 3D models
+- **Intelligent Compression**: Auto-detects existing Draco compression and selects optimal strategy
 - **Dual Compression Support**: 
   - Draco 3D geometry compression for meshes
   - KTX2 Basis Universal texture compression
+- **Smart Format Selection**: Automatic normal map detection with manual override options
 - **Modern Architecture**: Built with TypeScript and Hono framework
 - **Multi-Format Support**: PNG, JPG, JPEG, WebP texture processing
-- **Flexible API**: Individual or combined compression workflows
+- **Flexible API**: Individual or combined compression workflows with advanced parameters
 - **Production Ready**: Docker support with health monitoring
 - **CORS Enabled**: Ready for web application integration
 - **Comprehensive Logging**: Detailed request/response tracking
@@ -139,25 +141,52 @@ curl -X POST \
   -F "flipY=true" \
   http://localhost:3117/compress/textures \
   -o compressed.glb
+
+# Force ETC1S for all textures (including normal maps)
+curl -X POST \
+  -F "glb=@model.glb" \
+  -F "format=ETC1S" \
+  -F "forceFormat=true" \
+  http://localhost:3117/compress/textures \
+  -o compressed.glb
 ```
 
 **Supported Formats:**
 - **ETC1S**: High compression ratio (recommended for mobile/web)
 - **UASTC**: Higher quality with moderate compression
 
+**Advanced Parameters:**
+- `forceFormat=true`: Override normal map detection and use the specified format for all textures
+  - Normal maps are automatically detected and compressed with UASTC for quality preservation
+  - Use `forceFormat=true` to force ETC1S for maximum compression (80%+ vs -18% for normal maps)
+
 #### 3. Full Compression
 
 **POST** `/compress/full`
 
-Apply both mesh and texture compression for maximum reduction.
+Apply both mesh and texture compression for maximum reduction with intelligent compression strategy selection.
 
 ```bash
+# Basic full compression with intelligent Draco detection
 curl -X POST \
   -H "Content-Type: application/octet-stream" \
   --data-binary "@model.glb" \
   http://localhost:3117/compress/full \
   -o fully_compressed.glb
+
+# Force full compression even if Draco is already present
+curl -X POST \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary "@model.glb" \
+  "http://localhost:3117/compress/full?ignoreDraco=true" \
+  -o fully_compressed.glb
 ```
+
+**Intelligent Compression Strategy:**
+- **Auto-Detection**: The service automatically analyzes GLB files to detect existing Draco compression
+- **Smart Routing**: Files with existing Draco compression are routed to texture-only compression
+- **Optimal Results**: Achieves better compression ratios by avoiding conflicts (83% vs 0.74% for pre-compressed files)
+- **Override Option**: Use `ignoreDraco=true` to force full compression regardless of existing compression
 
 #### 4. Individual Texture Processing
 
@@ -196,6 +225,21 @@ curl -X POST \
 - **Compression**: Moderate (70-80% reduction) 
 - **Quality**: Excellent detail preservation
 - **Use case**: High-end visualization, PBR workflows
+
+### Intelligent Compression System
+
+The service includes advanced analysis capabilities to optimize compression strategies:
+
+#### Auto-Detection Features
+- **Draco Detection**: Automatically identifies files with existing Draco mesh compression
+- **Normal Map Detection**: Recognizes normal maps and applies appropriate compression format
+- **Content Analysis**: Analyzes texture types, mesh complexity, and file structure
+- **Strategy Selection**: Chooses optimal compression approach based on file analysis
+
+#### Override Parameters
+- `forceFormat=true`: Force specific texture format for all textures
+- `ignoreDraco=true`: Bypass Draco detection and force full compression
+- `flipY=true/false`: Control texture vertical orientation
 
 ### Advanced Parameters
 
