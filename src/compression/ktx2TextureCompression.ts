@@ -1,4 +1,4 @@
-import { createCanvas, loadImage } from 'canvas';
+import { createCanvas, loadImage, ImageData } from 'canvas';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
@@ -40,10 +40,172 @@ export interface KTX2CompressionSettings {
 // KTX module will be loaded dynamically
 let ktx: any = null;
 let ktxInitialized = false;
+let isInitializing = false;
+
+// Request queue to prevent WASM module overload
+interface CompressionRequest {
+  resolve: (result: KTX2CompressionResult) => void;
+  reject: (error: Error) => void;
+  imageArrayBuffer: ArrayBuffer;
+  settings: KTX2CompressionSettings;
+}
+
+class KTX2RequestQueue {
+  private queue: CompressionRequest[] = [];
+  private processing = false;
+  private maxConcurrent = 1; // Process one request at a time to prevent WASM crashes
+  private currentRequests = 0;
+
+  async add(imageArrayBuffer: ArrayBuffer, settings: KTX2CompressionSettings): Promise<KTX2CompressionResult> {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ resolve, reject, imageArrayBuffer, settings });
+      this.processQueue();
+    });
+  }
+
+  private async processQueue() {
+    if (this.processing || this.currentRequests >= this.maxConcurrent) {
+      return;
+    }
+
+    const request = this.queue.shift();
+    if (!request) {
+      return;
+    }
+
+    this.processing = true;
+    this.currentRequests++;
+
+    try {
+      const result = await this.processRequest(request.imageArrayBuffer, request.settings);
+      // Reset error count on successful compression
+      consecutiveErrors = 0;
+      request.resolve(result);
+    } catch (error) {
+      const handledError = handleCompressionError(error instanceof Error ? error : new Error('Unknown compression error'));
+      request.reject(handledError);
+    } finally {
+      this.currentRequests--;
+      this.processing = false;
+      // Process next request if any
+      if (this.queue.length > 0) {
+        setTimeout(() => this.processQueue(), 0);
+      }
+    }
+  }
+
+  private async processRequest(imageArrayBuffer: ArrayBuffer, settings: KTX2CompressionSettings): Promise<KTX2CompressionResult> {
+    // Add timeout protection
+    const timeoutMs = 30000; // 30 seconds timeout
+    return Promise.race([
+      compressImageToKTX2Internal(imageArrayBuffer, settings),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Compression timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
+      })
+    ]);
+  }
+}
+
+const requestQueue = new KTX2RequestQueue();
+
+// Module health tracking
+let consecutiveErrors = 0;
+const MAX_CONSECUTIVE_ERRORS = 3;
+let lastErrorTime = 0;
+const ERROR_RESET_INTERVAL = 60000; // 1 minute
+
+// Circuit breaker for module initialization
+let initFailureCount = 0;
+const MAX_INIT_FAILURES = 5;
+let lastInitFailureTime = 0;
+const INIT_FAILURE_COOLDOWN = 300000; // 5 minutes
+
+/**
+ * Resets the KTX module in case of errors
+ */
+async function resetKTXModule(): Promise<void> {
+  console.log("KTX2: Resetting KTX module due to errors...");
+
+  // Clear current state
+  ktx = null;
+  ktxInitialized = false;
+  isInitializing = false;
+
+  // Force garbage collection if available
+  if (typeof global !== 'undefined' && global.gc) {
+    global.gc();
+  }
+
+  // Wait a bit before reinitializing
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // Reinitialize
+  await initKtxModule();
+
+  console.log("KTX2: Module reset complete");
+}
+
+/**
+ * Tracks errors and triggers module reset if necessary
+ */
+function handleCompressionError(error: Error): Error {
+  const now = Date.now();
+
+  // Reset error count if enough time has passed
+  if (now - lastErrorTime > ERROR_RESET_INTERVAL) {
+    consecutiveErrors = 0;
+  }
+
+  consecutiveErrors++;
+  lastErrorTime = now;
+
+  console.error(`KTX2: Compression error ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}:`, error.message);
+
+  // If we have too many consecutive errors, schedule a module reset
+  if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+    console.warn("KTX2: Too many consecutive errors, scheduling module reset...");
+    consecutiveErrors = 0; // Reset counter to prevent multiple resets
+
+    // Schedule reset asynchronously to not block current operation
+    setTimeout(() => {
+      resetKTXModule().catch(resetError => {
+        console.error("KTX2: Failed to reset module:", resetError);
+      });
+    }, 0);
+  }
+
+  return error;
+}
 
 // Initialize KTX module using local files with simple Function approach
 async function initKtxModule(): Promise<void> {
   if (ktxInitialized && ktx) return;
+
+  // Circuit breaker: Check if we're in cooldown period after too many failures
+  const now = Date.now();
+  if (initFailureCount >= MAX_INIT_FAILURES) {
+    if (now - lastInitFailureTime < INIT_FAILURE_COOLDOWN) {
+      const remainingCooldown = Math.ceil((INIT_FAILURE_COOLDOWN - (now - lastInitFailureTime)) / 1000);
+      throw new Error(`KTX module initialization circuit breaker active. Too many failures. Retry in ${remainingCooldown} seconds.`);
+    } else {
+      // Reset failure count after cooldown
+      initFailureCount = 0;
+    }
+  }
+
+  // Prevent multiple simultaneous initialization attempts
+  if (isInitializing) {
+    // Wait for initialization to complete
+    while (isInitializing) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (ktxInitialized && ktx) return;
+    throw new Error('KTX module initialization failed in concurrent attempt');
+  }
+
+  isInitializing = true;
 
   try {
     console.log("KTX2: Initializing libktx.js module from local files...");
@@ -131,8 +293,14 @@ async function initKtxModule(): Promise<void> {
 
       console.log("KTX2: Calling createKtxModule...");
       ktx = await ktxModuleCreator(moduleConfig);
+
+      // Validate essential components are available
+      if (!ktx || !ktx.texture || !ktx.ErrorCode || !ktx.VkFormat || !ktx.textureCreateInfo || !ktx.TextureCreateStorageEnum || !ktx.basisParams) {
+        throw new Error('KTX module initialization succeeded but essential components are missing');
+      }
+
       ktxInitialized = true;
-      
+
       console.log("KTX2: KTX module initialized successfully");
       console.log("KTX2: Available components:", ktx ? Object.keys(ktx) : 'none');
       
@@ -160,8 +328,14 @@ async function initKtxModule(): Promise<void> {
     }
     
   } catch (error) {
-    console.error("KTX2: Failed to initialize KTX module:", error);
+    ktx = null;
+    ktxInitialized = false;
+    initFailureCount++;
+    lastInitFailureTime = Date.now();
+    console.error(`KTX2: Failed to initialize KTX module (failure ${initFailureCount}/${MAX_INIT_FAILURES}):`, error);
     throw new Error(`KTX2 module initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  } finally {
+    isInitializing = false;
   }
 }
 
@@ -315,8 +489,81 @@ function determineCompressionFormat(settings: KTX2CompressionSettings): KTX2Tran
   return KTX2TranscoderFormat.ETC1S;
 }
 
+/**
+ * Validates input parameters before compression
+ */
+function validateCompressionInputs(imageArrayBuffer: ArrayBuffer, settings: KTX2CompressionSettings): void {
+  if (!imageArrayBuffer) {
+    throw new Error('Input imageArrayBuffer is null or undefined');
+  }
+
+  if (!(imageArrayBuffer instanceof ArrayBuffer)) {
+    throw new Error('Input must be an ArrayBuffer');
+  }
+
+  if (imageArrayBuffer.byteLength === 0) {
+    throw new Error('Input ArrayBuffer is empty');
+  }
+
+  // More conservative memory limit to prevent WASM crashes
+  const maxSize = 50 * 1024 * 1024; // 50MB limit
+  if (imageArrayBuffer.byteLength > maxSize) {
+    throw new Error(`Input image too large: ${(imageArrayBuffer.byteLength / 1024 / 1024).toFixed(2)}MB. Maximum allowed: ${maxSize / 1024 / 1024}MB`);
+  }
+
+  // Validate settings object
+  if (settings && typeof settings !== 'object') {
+    throw new Error('Settings must be an object');
+  }
+}
+
+/**
+ * Checks if there's enough memory available for processing
+ */
+function checkMemoryAvailability(imageArrayBuffer: ArrayBuffer): void {
+  const requiredMemory = imageArrayBuffer.byteLength * 4; // More conservative estimate: 4x memory usage for processing
+
+  // Check if we have enough memory (rough estimate)
+  if (typeof performance !== 'undefined' && 'memory' in performance) {
+    const memInfo = (performance as any).memory;
+    if (memInfo && memInfo.usedJSHeapSize) {
+      const availableMemory = memInfo.jsHeapSizeLimit - memInfo.usedJSHeapSize;
+      const memoryUsagePercent = (memInfo.usedJSHeapSize / memInfo.jsHeapSizeLimit) * 100;
+
+      console.log(`KTX2: Memory check - Used: ${(memInfo.usedJSHeapSize / 1024 / 1024).toFixed(2)}MB, ` +
+                  `Available: ${(availableMemory / 1024 / 1024).toFixed(2)}MB, ` +
+                  `Usage: ${memoryUsagePercent.toFixed(1)}%, ` +
+                  `Required: ${(requiredMemory / 1024 / 1024).toFixed(2)}MB`);
+
+      if (availableMemory < requiredMemory) {
+        throw new Error(`Insufficient memory. Required: ${(requiredMemory / 1024 / 1024).toFixed(2)}MB, Available: ${(availableMemory / 1024 / 1024).toFixed(2)}MB`);
+      }
+
+      // Warn if memory usage is getting high
+      if (memoryUsagePercent > 80) {
+        console.warn(`KTX2: High memory usage detected: ${memoryUsagePercent.toFixed(1)}%`);
+      }
+    }
+  }
+}
+
 export async function compressImageToKTX2(
-  imageArrayBuffer: ArrayBuffer, 
+  imageArrayBuffer: ArrayBuffer,
+  settings: KTX2CompressionSettings = {}
+): Promise<KTX2CompressionResult> {
+  // Validate inputs
+  validateCompressionInputs(imageArrayBuffer, settings);
+  checkMemoryAvailability(imageArrayBuffer);
+
+  // Use request queue to prevent WASM module overload
+  return requestQueue.add(imageArrayBuffer, settings);
+}
+
+/**
+ * Internal compression function that does the actual work
+ */
+async function compressImageToKTX2Internal(
+  imageArrayBuffer: ArrayBuffer,
   settings: KTX2CompressionSettings = {}
 ): Promise<KTX2CompressionResult> {
   console.log("KTX2: Starting image to KTX2 compression");
@@ -366,6 +613,8 @@ export async function compressImageToKTX2(
 
   let ktxTextureInstance: any = null;
   let basisParams: any = null;
+  let imageData: ImageData | null = null;
+  let canvas: any = null;
 
   try {
     // Convert ArrayBuffer to Buffer for canvas operations
@@ -374,6 +623,22 @@ export async function compressImageToKTX2(
     // Load the image using canvas (supports PNG, JPG, JPEG, etc.)
     const image = await loadImage(imageBuffer);
     console.log(`KTX2: Image loaded - ${image.width}x${image.height}`);
+
+    // Validate image dimensions to prevent WASM crashes
+    const maxDimension = 8192; // 8K max dimension
+    if (image.width > maxDimension || image.height > maxDimension) {
+      throw new Error(`Image dimensions too large: ${image.width}x${image.height}. Maximum allowed: ${maxDimension}x${maxDimension}`);
+    }
+
+    if (image.width < 4 || image.height < 4) {
+      throw new Error(`Image dimensions too small: ${image.width}x${image.height}. Minimum required: 4x4`);
+    }
+
+    // Check for reasonable aspect ratios to prevent extreme memory usage
+    const aspectRatio = Math.max(image.width, image.height) / Math.min(image.width, image.height);
+    if (aspectRatio > 16) {
+      throw new Error(`Image aspect ratio too extreme: ${aspectRatio.toFixed(2)}:1. Maximum allowed: 16:1`);
+    }
     
     // Ensure WebGL-compatible dimensions for mipmaps
     // WebGL requires each mipmap level to have dimensions that are multiples of 4 or equal to 0, 1, or 2
@@ -393,8 +658,12 @@ export async function compressImageToKTX2(
     console.log(`KTX2: WebGL-compatible dimensions - ${width}x${height} (original: ${image.width}x${image.height})`);
     
     // Create canvas and get image data
-    const canvas = createCanvas(width, height);
+    canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
+
+    if (!ctx) {
+      throw new Error('Failed to get 2D context from canvas');
+    }
     
     // Handle image flipping for GLB textures if requested
     if (compressionSettings.flipY) {
@@ -407,8 +676,21 @@ export async function compressImageToKTX2(
       ctx.drawImage(image, 0, 0, width, height);
     }
     
-    const imageData = ctx.getImageData(0, 0, width, height);
+    imageData = ctx.getImageData(0, 0, width, height);
+    if (!imageData) {
+      throw new Error('Failed to extract image data from canvas context');
+    }
     console.log(`KTX2: Image data extracted - ${imageData.data.length} bytes`);
+
+    // Validate image data
+    if (!imageData || !imageData.data || imageData.data.length === 0) {
+      throw new Error('Failed to extract valid image data from canvas');
+    }
+
+    // Additional safety check for image dimensions
+    if (imageData.width !== width || imageData.height !== height) {
+      throw new Error(`Image data dimensions mismatch. Expected: ${width}x${height}, Got: ${imageData.width}x${imageData.height}`);
+    }
 
     // Create KTX texture
     console.log("KTX2: Creating textureCreateInfo...");
@@ -455,7 +737,23 @@ export async function compressImageToKTX2(
     }
 
     console.log("KTX2: Setting image data...");
-    const setImageResult = ktxTextureInstance.setImageFromMemory(0, 0, 0, imageData.data);
+
+    // Additional validation before calling WASM function
+    if (!imageData.data || imageData.data.length === 0) {
+      throw new Error('Image data is empty or invalid');
+    }
+
+    if (imageData.data.length !== width * height * 4) {
+      throw new Error(`Image data size mismatch. Expected: ${width * height * 4}, Got: ${imageData.data.length}`);
+    }
+
+    let setImageResult;
+    try {
+      setImageResult = ktxTextureInstance.setImageFromMemory(0, 0, 0, imageData.data);
+    } catch (wasmError) {
+      throw new Error(`WASM setImageFromMemory call failed: ${wasmError instanceof Error ? wasmError.message : 'Unknown WASM error'}`);
+    }
+
     if (setImageResult !== ktx.ErrorCode.SUCCESS) {
       throw new Error(`Failed to set image from memory. Error code: ${setImageResult}`);
     }
@@ -537,7 +835,14 @@ export async function compressImageToKTX2(
 
     // Compress to Basis Universal
     console.log("KTX2: Compressing to Basis Universal...");
-    const compressResult = ktxTextureInstance.compressBasis(basisParams);
+
+    let compressResult;
+    try {
+      compressResult = ktxTextureInstance.compressBasis(basisParams);
+    } catch (wasmError) {
+      throw new Error(`WASM compressBasis call failed: ${wasmError instanceof Error ? wasmError.message : 'Unknown WASM error'}`);
+    }
+
     if (compressResult !== ktx.ErrorCode.SUCCESS) {
       throw new Error(`Failed to compress KTX texture to Basis Universal. Error code: ${compressResult}`);
     }
@@ -545,7 +850,14 @@ export async function compressImageToKTX2(
 
     // Get KTX2 data
     console.log("KTX2: Writing KTX2 data to memory...");
-    const ktx2FileBytes = ktxTextureInstance.writeToMemory();
+
+    let ktx2FileBytes;
+    try {
+      ktx2FileBytes = ktxTextureInstance.writeToMemory();
+    } catch (wasmError) {
+      throw new Error(`WASM writeToMemory call failed: ${wasmError instanceof Error ? wasmError.message : 'Unknown WASM error'}`);
+    }
+
     if (!ktx2FileBytes || ktx2FileBytes.length === 0) {
       throw new Error("compressBasis succeeded but writeToMemory returned no data");
     }
@@ -574,14 +886,34 @@ export async function compressImageToKTX2(
     console.error("KTX2: Compression failed:", error);
     throw new Error(`KTX2 compression failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   } finally {
-    // Clean up KTX objects
-    if (ktxTextureInstance) {
-      console.log("KTX2: Deleting KTX texture object");
-      ktxTextureInstance.delete();
+    // Clean up KTX objects with error handling
+    try {
+      if (ktxTextureInstance) {
+        console.log("KTX2: Deleting KTX texture object");
+        ktxTextureInstance.delete();
+      }
+    } catch (error) {
+      console.warn("KTX2: Warning - Failed to delete KTX texture object:", error);
     }
-    if (basisParams) {
-      console.log("KTX2: Deleting Basis parameters object");
-      basisParams.delete();
+
+    try {
+      if (basisParams) {
+        console.log("KTX2: Deleting Basis parameters object");
+        basisParams.delete();
+      }
+    } catch (error) {
+      console.warn("KTX2: Warning - Failed to delete Basis parameters object:", error);
+    }
+
+    // Clear references
+    ktxTextureInstance = null;
+    basisParams = null;
+    imageData = null;
+    canvas = null;
+
+    // Force garbage collection hint
+    if (typeof global !== 'undefined' && global.gc) {
+      global.gc();
     }
   }
 }
@@ -610,10 +942,13 @@ export async function compressPNGToKTX2Legacy(pngBuffer: ArrayBuffer): Promise<A
  * Updated to accept custom compression settings with ETC1S as default format
  */
 export async function compressGLBTexturesKTX2(
-  inputBuffer: ArrayBuffer, 
+  inputBuffer: ArrayBuffer,
   compressionSettings: KTX2CompressionSettings = {}
 ): Promise<KTX2CompressionResult> {
   console.log("Starting enhanced GLB texture compression with KTX2...");
+
+  // Validate inputs
+  validateCompressionInputs(inputBuffer, compressionSettings);
   
   // Default settings for GLB compression with ETC1S as default and flipY enabled
   const defaultSettings: KTX2CompressionSettings = {
@@ -777,8 +1112,8 @@ export async function compressGLBTexturesKTX2(
           }
         };
 
-        // Compress the image data to KTX2
-        const compressionResult = await compressImageToKTX2(image.buffer as ArrayBuffer, textureSettings);
+        // Compress the image data to KTX2 using internal function to bypass queue
+        const compressionResult = await compressImageToKTX2Internal(image.buffer as ArrayBuffer, textureSettings);
 
         // Update the texture with compressed data
         texture.setImage(new Uint8Array(compressionResult.buffer));

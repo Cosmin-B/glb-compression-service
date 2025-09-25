@@ -100,7 +100,7 @@ class RequestQueueManager {
   /**
    * Get configuration for endpoint (with fallback to default)
    */
-  private getConfig(endpoint: string): QueueConfig {
+  getConfig(endpoint: string): QueueConfig {
     return this.config.get(endpoint) || this.config.get('default')!;
   }
 
@@ -268,7 +268,7 @@ class RequestQueueManager {
   getQueueStats(): Record<string, any> {
     const allStats: Record<string, any> = {};
 
-    for (const [endpoint, stats] of this.stats.entries()) {
+    for (const [endpoint, stats] of Array.from(this.stats.entries())) {
       const config = this.getConfig(endpoint);
       allStats[endpoint] = {
         ...stats,
@@ -299,7 +299,7 @@ class RequestQueueManager {
    * Reset statistics (for testing)
    */
   resetStats(): void {
-    for (const stats of this.stats.values()) {
+    for (const stats of Array.from(this.stats.values())) {
       stats.active = 0;
       stats.queued = 0;
       stats.completed = 0;
@@ -349,11 +349,12 @@ export function createRequestQueueMiddleware() {
 
     } catch (error) {
       // Request was rejected or timed out in queue
-      console.error(`[QUEUE] ${endpoint}: Request ${requestId} rejected - ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[QUEUE] ${endpoint}: Request ${requestId} rejected - ${errorMessage}`);
 
       const errorResponse = {
         error: 'Service overloaded',
-        message: error.message,
+        message: errorMessage,
         requestId,
         endpoint,
         queueStats: queueManager.getQueueStats().endpoints[endpoint] || {}
@@ -387,4 +388,5 @@ export function resetQueueStats() {
   queueManager.resetStats();
 }
 
-export { QueueConfig, RequestQueueManager };
+export type { QueueConfig };
+export { RequestQueueManager };
