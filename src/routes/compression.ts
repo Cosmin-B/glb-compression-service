@@ -112,15 +112,43 @@ const validateFlipY = (flipY: string): boolean => {
 };
 
 // Helper function to validate and parse basisParams
-const validateBasisParams = (basisParams: string): any => {
+const validateAndParseBasisParams = (basisParams: any): any => {
   try {
-    const parsed = JSON.parse(basisParams);
+    let parsed;
+
+    // Handle different input types
+    if (typeof basisParams === 'string') {
+      // Check for common FormData conversion issues
+      if (basisParams === '[object Object]') {
+        throw new Error('basisParams was sent as an object but converted to "[object Object]" string. Please send basisParams as a JSON string instead. Example: {"rdo_uastc_quality_scalar": 2, "generateMipmaps": true}');
+      }
+
+      // Try to parse JSON string
+      try {
+        parsed = JSON.parse(basisParams);
+      } catch (parseError) {
+        throw new Error(`Failed to parse basisParams JSON string: ${parseError instanceof Error ? parseError.message : 'Invalid JSON format'}`);
+      }
+    } else if (typeof basisParams === 'object' && basisParams !== null) {
+      // Already an object, use directly
+      parsed = basisParams;
+    } else {
+      throw new Error(`Invalid basisParams type: ${typeof basisParams}. Expected JSON string or object.`);
+    }
+
+    // Validate that result is an object
     if (typeof parsed !== 'object' || parsed === null) {
       throw new Error('basisParams must be a valid JSON object');
     }
+
+    // Optional: Log the successfully parsed parameters for debugging
+    console.log("API: Successfully parsed basisParams:", JSON.stringify(parsed, null, 2));
+
     return parsed;
   } catch (error) {
-    throw new Error(`Invalid basisParams JSON: ${error instanceof Error ? error.message : 'Unknown parsing error'}`);
+    // Provide helpful error message with examples
+    const errorMsg = error instanceof Error ? error.message : 'Unknown parsing error';
+    throw new Error(`Invalid basisParams: ${errorMsg}. Expected format: JSON string like '{"rdo_uastc_quality_scalar": 2, "generateMipmaps": true}' or valid object.`);
   }
 };
 
@@ -183,7 +211,7 @@ compression.post('/textures', async (c) => {
       
       // Validate and set basisParams
       if (basisParamsParam) {
-        basisParams = validateBasisParams(basisParamsParam);
+        basisParams = validateAndParseBasisParams(basisParamsParam);
       }
       
       arrayBuffer = await glbFile.arrayBuffer();

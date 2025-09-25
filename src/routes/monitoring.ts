@@ -1,6 +1,22 @@
 import { Hono } from 'hono';
 import { getQueueStats, configureEndpoint } from '../middleware/requestQueue.js';
 
+/**
+ * Safely extract error message from unknown error type
+ */
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String(error.message);
+  }
+  return 'An unknown error occurred';
+}
+
 const monitoring = new Hono();
 
 /**
@@ -35,7 +51,7 @@ monitoring.get('/stats', (c) => {
     console.error('Error fetching queue stats:', error);
     return c.json({
       error: 'Failed to fetch queue statistics',
-      message: error.message
+      message: getErrorMessage(error)
     }, 500);
   }
 });
@@ -92,7 +108,7 @@ monitoring.get('/health', (c) => {
     return c.json({
       status: 'error',
       timestamp: new Date().toISOString(),
-      error: error.message
+      error: getErrorMessage(error)
     }, 500);
   }
 });
@@ -138,7 +154,7 @@ monitoring.post('/config', async (c) => {
     console.error('Error updating queue config:', error);
     return c.json({
       error: 'Failed to update configuration',
-      message: error.message
+      message: getErrorMessage(error)
     }, 500);
   }
 });
@@ -183,7 +199,7 @@ monitoring.get('/endpoints', (c) => {
     console.error('Error fetching endpoint info:', error);
     return c.json({
       error: 'Failed to fetch endpoint information',
-      message: error.message
+      message: getErrorMessage(error)
     }, 500);
   }
 });
